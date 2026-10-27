@@ -22,67 +22,31 @@ object EditRenderer {
         video: VideoInfo,
         clips: List<Highlight>,
         music: Uri,
-        sfx: Uri,
         out: File,
         onProgress: (Double) -> Unit
     ): Pair<Boolean, String> {
-        val musicPath = FFmpegKitConfig.getSafParameterForRead(context, music)
-        val sfxPath = FFmpegKitConfig.getSafParameterForRead(context, sfx)
-
         val n = clips.size
         val total = clips.sumOf { it.endSec - it.startSec }
         val t = f(total)
 
-        // Inputs: one per clip (fast seek), then music, then sound effect
         val args = mutableListOf("-y", "-hide_banner")
+
+        // One fresh file handle per clip (a handle can only be read once)
         for (c in clips) {
-            args += listOf("-ss", f(c.startSec), "-t", f(c.endSec - c.startSec), "-i", video.ffmpegPath)
+            val path = FFmpegKitConfig.getSafParameterForRead(context, video.uri)
+            args += listOf("-ss", f(c.startSec), "-t", f(c.endSec - c.startSec), "-i", path)
         }
-        args += listOf("-i", musicPath, "-i", sfxPath)
+        val musicPath = FFmpegKitConfig.getSafParameterForRead(context, music)
+        args += listOf("-i", musicPath)
 
-        val musicIdx = n
-        val sfxIdx = n + 1
         val fc = StringBuilder()
-
-        // Video: join the clips
         for (i in 0 until n) fc.append("[$i:v]setpts=PTS-STARTPTS[v$i];")
         for (i in 0 until n) fc.append("[v$i]")
         fc.append("concat=n=$n:v=1:a=0[vout];")
 
-        // Sound effect times = the cut points in the final video
-        val cuts = mutableListOf<Double>()
-        var acc = 0.0
-        clips.forEachIndexed { i, c ->
-            if (i > 0) cuts += acc
-            acc += c.endSec - c.startSec
-        }
-        if (cuts.isEmpty()) cuts += 1.0
-        val k = cuts.size
-
-        val norm = "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo"
-        if (k == 1) {
-            val ms = (cuts[0] * 1000).toLong()
-            fc.append("[$sfxIdx:a]$norm,adelay=$ms|$ms,apad=whole_dur=$t,asplit=2[sfxmix][sfxsc];")
-        } else {
-            fc.append("[$sfxIdx:a]$norm,asplit=$k")
-            for (i in 0 until k) fc.append("[s$i]")
-            fc.append(";")
-            cuts.forEachIndexed { i, sec ->
-                val ms = (sec * 1000).toLong()
-                fc.append("[s$i]adelay=$ms|$ms[d$i];")
-            }
-            for (i in 0 until k) fc.append("[d$i]")
-            fc.append("amix=inputs=$k:duration=longest:dropout_transition=0,volume=$k,")
-            fc.append("apad=whole_dur=$t,asplit=2[sfxmix][sfxsc];")
-        }
-
-        // Music bed, then duck it whenever the sound effect plays
-        fc.append("[$musicIdx:a]$norm,volume=0.6,apad=whole_dur=$t[bg];")
-        fc.append("[bg][sfxsc]sidechaincompress=threshold=0.03:ratio=10:attack=20:release=500[ducked];")
-
         val fadeStart = f((total - 1.5).coerceAtLeast(0.0))
-        fc.append("[ducked][sfxmix]amix=inputs=2:duration=first:dropout_transition=0,volume=2,")
-        fc.append("afade=t=out:st=$fadeStart:d=1.5[aout]")
+        fc.append("[$n:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,")
+        fc.append("volume=0.8,apad,afade=t=out:st=$fadeStart:d=1.5[aout]")
 
         args += listOf(
             "-filter_complex", fc.toString(),
