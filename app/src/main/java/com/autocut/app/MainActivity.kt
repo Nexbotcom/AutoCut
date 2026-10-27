@@ -20,7 +20,6 @@ class MainActivity : AppCompatActivity() {
     private var current: VideoInfo? = null
     private var highlights: List<Highlight> = emptyList()
     private var musicUri: Uri? = null
-    private var sfxUri: Uri? = null
 
     private val videoPicker = registerForActivityResult(
         ActivityResultContracts.GetContent()
@@ -47,13 +46,7 @@ class MainActivity : AppCompatActivity() {
     private val musicPicker = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
-        if (uri != null) { musicUri = uri; show("Music selected.\n" + selections()) }
-    }
-
-    private val sfxPicker = registerForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri != null) { sfxUri = uri; show("Sound effect selected.\n" + selections()) }
+        if (uri != null) { musicUri = uri; show("Music selected.") }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -65,7 +58,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(pad, pad * 3, pad, pad)
         }
         status = TextView(this).apply {
-            text = "1) Pick video  2) Find highlights\n3) Pick music  4) Pick sound effect\n5) Render edit"
+            text = "1) Pick video  2) Find highlights\n3) Pick music  4) Render edit"
             textSize = 16f
         }
 
@@ -77,8 +70,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(button("1. Pick video") { videoPicker.launch("video/*") })
         root.addView(button("2. Find highlights") { findHighlights() })
         root.addView(button("3. Pick music") { musicPicker.launch("audio/*") })
-        root.addView(button("4. Pick sound effect") { sfxPicker.launch("audio/*") })
-        root.addView(button("5. Render edit") { render() })
+        root.addView(button("4. Render edit") { render() })
         root.addView(ScrollView(this).apply { addView(status) })
         setContentView(root)
     }
@@ -89,10 +81,6 @@ class MainActivity : AppCompatActivity() {
         val s = sec.toInt()
         return "%d:%02d".format(s / 60, s % 60)
     }
-
-    private fun selections() =
-        "Music: ${if (musicUri != null) "set" else "not set"}\n" +
-        "Sound effect: ${if (sfxUri != null) "set" else "not set"}"
 
     private fun findHighlights() {
         val info = current ?: return show("Pick a video first.")
@@ -113,8 +101,7 @@ class MainActivity : AppCompatActivity() {
                 val lines = result.mapIndexed { i, h ->
                     "${i + 1}. ${fmt(h.startSec)} - ${fmt(h.endSec)}  (score ${"%.2f".format(h.score)})"
                 }
-                show("Top highlights (took ${secs}s):\n\n" + lines.joinToString("\n") +
-                    "\n\n" + selections())
+                show("Top highlights (took ${secs}s):\n\n" + lines.joinToString("\n"))
             }
         }
     }
@@ -123,14 +110,13 @@ class MainActivity : AppCompatActivity() {
         val info = current ?: return show("Pick a video first.")
         if (highlights.isEmpty()) return show("Run 'Find highlights' first.")
         val music = musicUri ?: return show("Pick a music file first.")
-        val sfx = sfxUri ?: return show("Pick a sound effect first.")
 
         show("Rendering...")
         lifecycleScope.launch {
             val started = System.currentTimeMillis()
             val out = File(cacheDir, "AutoCut_${System.currentTimeMillis()}.mp4")
             val (ok, log) = EditRenderer.render(
-                this@MainActivity, info, highlights, music, sfx, out
+                this@MainActivity, info, highlights, music, out
             ) { p -> show("Rendering... ${(p * 100).toInt()}%") }
 
             val secs = (System.currentTimeMillis() - started) / 1000
