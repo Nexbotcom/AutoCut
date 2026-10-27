@@ -15,6 +15,9 @@ import kotlin.coroutines.resume
 
 object EditRenderer {
 
+    private const val TD = 0.5 // transition length in seconds
+    private val TRANSITIONS = listOf("fade", "slideleft", "zoomin", "fadeblack", "dissolve")
+
     private fun f(x: Double) = String.format(Locale.US, "%.3f", x)
 
     suspend fun render(
@@ -25,28 +28,66 @@ object EditRenderer {
         out: File,
         onProgress: (Double) -> Unit
     ): Pair<Boolean, String> {
-        val n = clips.size
-        val total = clips.sumOf { it.endSec - it.startSec }
+        val use = clips.filter { it.endSec - it.startSec >= 1.5 }
+        if (use.isEmpty()) return false to "No clips long enough to edit."
+
+        val n = use.size
+        val durs = use.map { it.endSec - it.startSec }
+        val total = durs.sum() - (n - 1) * TD
         val t = f(total)
+
+        // Output size: keep source size, cap at 1920, force even numbers
+        var w = if (video.width > 0) video.width else 1280
+        var h = if (video.height > 0) video.height else 720
+        val cap = 1920.0 / maxOf(w, h)
+        if (cap < 1.0) { w = (w * cap).toInt(); h = (h * cap).toInt() }
+        w = w / 2 * 2
+        h = h / 2 * 2
 
         val args = mutableListOf("-y", "-hide_banner")
 
         // One fresh file handle per clip (a handle can only be read once)
-        for (c in clips) {
+        use.forEachIndexed { i, c ->
             val path = FFmpegKitConfig.getSafParameterForRead(context, video.uri)
-            args += listOf("-ss", f(c.startSec), "-t", f(c.endSec - c.startSec), "-i", path)
+            args += listOf("-ss", f(c.startSec), "-t", f(durs[i]), "-i", path)
         }
         val musicPath = FFmpegKitConfig.getSafParameterForRead(context, music)
         args += listOf("-i", musicPath)
 
         val fc = StringBuilder()
-        for (i in 0 until n) fc.append("[$i:v]setpts=PTS-STARTPTS[v$i];")
-        for (i in 0 until n) fc.append("[v$i]")
-        fc.append("concat=n=$n:v=1:a=0[vout];")
 
-        val fadeStart = f((total - 1.5).coerceAtLeast(0.0))
+        // 1) Normalize every clip so they can be blended
+        for (i in 0 until n) {
+            fc.append("[$i:v]scale=$w:$h:force_original_aspect_ratio=decrease,")
+            fc.append("pad=$w:$h:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p,")
+            fc.append("setpts=PTS-STARTPTS[v$i];")
+        }
+
+        // 2) Chain transitions between clips
+        var prev = "v0"
+        var cum = durs[0]
+        for (k in 1 until n) {
+            val offset = cum - k * TD
+            val tr = TRANSITIONS[(k - 1) % TRANSITIONS.size]
+            fc.append("[$prev][v$k]xfade=transition=$tr:duration=$TD:offset=${f(offset)}[x$k];")
+            prev = "x$k"
+            cum += durs[k]
+        }
+
+        // 3) Cinematic look: color grade, vignette, black bars, fades
+        val vFadeOut = f((total - 0.8).coerceAtLeast(0.0))
+        fc.append("[$prev]eq=contrast=1.1:saturation=1.2:gamma=0.97,")
+        fc.append("colorbalance=rs=0.04:bs=-0.04:rh=0.03:bh=-0.03,")
+        fc.append("vignette=angle=PI/5,")
+        fc.append("drawbox=x=0:y=0:w=iw:h=ih*0.13:color=black:t=fill,")
+        fc.append("drawbox=x=0:y=ih*0.87:w=iw:h=ih*0.13:color=black:t=fill,")
+        fc.append("fade=t=in:st=0:d=0.6,fade=t=out:st=$vFadeOut:d=0.8[vout];")
+
+        // 4) Music bed with fade in and out
+        val aFadeOut = f((total - 1.5).coerceAtLeast(0.0))
         fc.append("[$n:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,")
-        fc.append("volume=0.8,apad,afade=t=out:st=$fadeStart:d=1.5[aout]")
+        fc.append("volume=0.8,apad=whole_dur=$t,afade=t=in:st=0:d=1,")
+        fc.append("afade=t=out:st=$aFadeOut:d=1.5[aout]")
 
         args += listOf(
             "-filter_complex", fc.toString(),
