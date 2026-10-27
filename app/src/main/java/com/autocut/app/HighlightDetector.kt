@@ -2,6 +2,7 @@ package com.autocut.app
 
 import android.content.Context
 import com.arthenica.ffmpegkit.FFmpegKit
+import com.arthenica.ffmpegkit.FFmpegKitConfig
 import com.arthenica.ffmpegkit.ReturnCode
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.File
@@ -20,15 +21,17 @@ object HighlightDetector {
         val aFile = File(context.cacheDir, "audio_scores.txt").also { it.delete() }
 
         // Pass 1: frame-to-frame difference (motion and scene changes)
+        val vPath = FFmpegKitConfig.getSafParameterForRead(context, video.uri)
         run(arrayOf(
-            "-hide_banner", "-i", video.ffmpegPath, "-an",
+            "-hide_banner", "-i", vPath, "-an",
             "-vf", "fps=$FPS,scale=320:-2,select='gte(scene,0)',metadata=print:file=${vFile.absolutePath}",
             "-f", "null", "-"
         ))
 
-        // Pass 2: audio loudness in 0.5s windows (skipped quietly if no audio track)
+        // Pass 2: audio loudness in 0.5s windows (own file handle, skipped if no audio)
+        val aPath = FFmpegKitConfig.getSafParameterForRead(context, video.uri)
         run(arrayOf(
-            "-hide_banner", "-i", video.ffmpegPath, "-vn",
+            "-hide_banner", "-i", aPath, "-vn",
             "-af", "aresample=8000,asetnsamples=n=4000:p=0,astats=metadata=1:reset=1," +
                 "ametadata=print:key=lavfi.astats.Overall.RMS_level:file=${aFile.absolutePath}",
             "-f", "null", "-"
