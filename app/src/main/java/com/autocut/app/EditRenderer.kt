@@ -100,17 +100,22 @@ object EditRenderer {
         )
 
         return suspendCancellableCoroutine { cont ->
-            FFmpegKit.executeWithArgumentsAsync(
+            val session = FFmpegKit.executeWithArgumentsAsync(
                 args.toTypedArray(),
-                { session ->
+                { s ->
                     if (cont.isActive) {
-                        val ok = ReturnCode.isSuccess(session.returnCode)
-                        cont.resume(ok to (session.output ?: "").takeLast(800))
+                        val ok = ReturnCode.isSuccess(s.returnCode)
+                        if (!ok) out.delete() // never leave a half-written file behind
+                        cont.resume(ok to (s.output ?: "").takeLast(800))
                     }
                 },
                 { _ -> },
                 { stats -> onProgress((stats.time / 1000.0 / total).coerceIn(0.0, 1.0)) }
             )
+            cont.invokeOnCancellation {
+                FFmpegKit.cancel(session.sessionId)
+                out.delete()
+            }
         }
     }
 
