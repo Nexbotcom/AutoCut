@@ -12,11 +12,15 @@ data class Highlight(val startSec: Double, val endSec: Double, val score: Double
 
 object HighlightDetector {
 
-    private const val FPS = 2          // video samples per second
-    private const val CLIP_LEN = 4.0   // seconds per highlight
-    private const val MIN_GAP = 6.0    // min seconds between highlights
+    private const val FPS = 2 // video samples per second
 
-    suspend fun detect(context: Context, video: VideoInfo, maxClips: Int = 5): List<Highlight> {
+    suspend fun detect(
+        context: Context,
+        video: VideoInfo,
+        maxClips: Int = 5,
+        clipLen: Double = 4.0
+    ): List<Highlight> {
+        val minGap = clipLen + 2.0
         val vFile = File(context.cacheDir, "video_scores.txt").also { it.delete() }
         val aFile = File(context.cacheDir, "audio_scores.txt").also { it.delete() }
 
@@ -58,21 +62,22 @@ object HighlightDetector {
         for ((idx, s) in scores) {
             val t = idx.toDouble() / FPS
             if (picked.size >= maxClips) break
-            if (picked.none { kotlin.math.abs(it.first - t) < MIN_GAP }) picked.add(t to s)
+            if (picked.none { kotlin.math.abs(it.first - t) < minGap }) picked.add(t to s)
         }
 
         return picked.map { (t, s) ->
-            val start = (t - CLIP_LEN / 2).coerceAtLeast(0.0)
-            val end = (start + CLIP_LEN).coerceAtMost(totalSec)
+            val start = (t - clipLen / 2).coerceAtLeast(0.0)
+            val end = (start + clipLen).coerceAtMost(totalSec)
             Highlight(start, end, s)
         }.sortedBy { it.startSec }
     }
 
     private suspend fun run(args: Array<String>): Boolean =
         suspendCancellableCoroutine { cont ->
-            FFmpegKit.executeWithArgumentsAsync(args) { session ->
-                if (cont.isActive) cont.resume(ReturnCode.isSuccess(session.returnCode))
+            val session = FFmpegKit.executeWithArgumentsAsync(args) { s ->
+                if (cont.isActive) cont.resume(ReturnCode.isSuccess(s.returnCode))
             }
+            cont.invokeOnCancellation { FFmpegKit.cancel(session.sessionId) }
         }
 
     // Reads FFmpeg's metadata print file into window-index -> value
